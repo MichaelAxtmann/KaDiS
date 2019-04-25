@@ -1,0 +1,6 @@
+[submodule "extlib/ips4o"]
+	path = external/ips4o
+	url = https://github.com/SaschaWitt/ips4o.git
+[submodule "external/RBC"]
+	path = external/RBC
+	url = https://github.com/MichaelAxtmann/RBC.git
