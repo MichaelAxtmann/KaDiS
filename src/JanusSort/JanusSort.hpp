@@ -5,20 +5,29 @@
  * Copyright (c) 2016-2017, Armin Wiebigke <armin.wiebigke@gmail.com>
  * Copyright (C) 2016-2019, Michael Axtmann <michael.axtmann@kit.edu>
  * Copyright (c) 2016-2017, Tobias Heuer <tobias.heuer@gmx.net>
+ * All rights reserved.
  *
- * This program is free software: you can redistribute it and/or modify it under
- * the terms of the GNU General Public License as published by the Free Software
- * Foundation, either version 3 of the License, or (at your option) any later
- * version.
+ * Redistribution and use in source and binary forms, with or without
+ * modification, are permitted provided that the following conditions are met:
  *
- * This program is distributed in the hope that it will be useful, but WITHOUT
- * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS
- * FOR A PARTICULAR PURPOSE.  See the GNU General Public License for more
- * details.
+ * * Redistributions of source code must retain the above copyright notice, this
+ *   list of conditions and the following disclaimer.
  *
- * You should have received a copy of the GNU General Public License along with
- * this program.  If not, see <http://www.gnu.org/licenses/>.
- *******************************************************************************/
+ * * Redistributions in binary form must reproduce the above copyright notice,
+ *   this list of conditions and the following disclaimer in the documentation
+ *   and/or other materials provided with the distribution.
+ *
+ * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
+ * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+ * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
+ * DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
+ * FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
+ * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
+ * SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
+ * CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
+ * OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+ * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ *****************************************************************************/
 
 #pragma once
 
@@ -26,20 +35,21 @@
 #include <cassert>
 #include <cstring>
 #include <functional>
-#include <iostream>
 #include <memory>
 #include <random>
 #include <string>
 #include <utility>
 #include <vector>
 
-#include "../../include/RBC/RBC.hpp"
+#include "../Tools/CommonMpi.hpp"
 #include "Constants.hpp"
 #include "DataExchange.hpp"
 #include "PivotSelection.hpp"
 #include "QSInterval.hpp"
 #include "SequentialSort.hpp"
 #include "TbSplitter.hpp"
+
+#include <RBC.hpp>
 
 namespace JanusSort {
 /*
@@ -495,7 +505,7 @@ class Sorter {
     return MPI_Wtime();
   }
 
-  double startTime(RBC::Comm& comm) {
+  double startTime(const RBC::Comm& comm) {
     if (!m_barriers)
       return getTime();
     RBC::Request req;
@@ -504,14 +514,14 @@ class Sorter {
     return getTime();
   }
 
-  double startTime_barrier(RBC::Comm& comm) {
+  double startTime_barrier(const RBC::Comm& comm) {
     RBC::Request req;
     RBC::Ibarrier(comm, &req);
     RBC::Wait(&req, MPI_STATUS_IGNORE);
     return getTime();
   }
 
-  double startTimeJanus(RBC::Comm& left_comm, RBC::Comm& right_comm) {
+  double startTimeJanus(const RBC::Comm& left_comm, const RBC::Comm& right_comm) {
     if (!m_barriers)
       return getTime();
     RBC::Request req[2];
@@ -521,7 +531,7 @@ class Sorter {
     return getTime();
   }
 
-  double startTimeJanus_barrier(RBC::Comm& left_comm, RBC::Comm& right_comm) {
+  double startTimeJanus_barrier(const RBC::Comm& left_comm, const RBC::Comm& right_comm) {
     RBC::Request req[2];
     RBC::Ibarrier(left_comm, &req[0]);
     RBC::Ibarrier(right_comm, &req[1]);
@@ -548,7 +558,8 @@ class Sorter {
                      T& pivot_right, int64_t& split_idx_left, int64_t& split_idx_right,
                      Compare&& comp) {
     PivotSelection_SQS<T>::getPivotJanus(ival_left, ival_right, pivot_left, pivot_right,
-                                         split_idx_left, split_idx_right, std::forward<Compare>(comp),
+                                         split_idx_left, split_idx_right, std::forward<Compare>(
+                                           comp),
                                          m_generator, m_sample_generator);
   }
 
@@ -602,7 +613,7 @@ class Sorter {
     int64_t in[2] = { ival.m_local_small_elements, ival.m_local_large_elements };
     int64_t presum[2], global[2];
     RBC::Request request;
-    RBC::IscanAndBcast(&in[0], &presum[0], &global[0], 2, MPI_LONG_LONG,
+    RBC::IscanAndBcast(&in[0], &presum[0], &global[0], 2, Common::getMpiType(in),
                        MPI_SUM, ival.m_comm, &request, Constants::CALC_EXCH);
     RBC::Wait(&request, MPI_STATUS_IGNORE);
 
@@ -647,9 +658,11 @@ class Sorter {
     int64_t in_right[2] = { ival_right.m_local_small_elements, ival_right.m_local_large_elements };
     int64_t presum_left[2], presum_right[2], global_left[2], global_right[2];
     RBC::Request requests[2];
-    RBC::IscanAndBcast(&in_left[0], &presum_left[0], &global_left[0], 2, MPI_LONG_LONG,
+    RBC::IscanAndBcast(&in_left[0], &presum_left[0], &global_left[0], 2,
+                       Common::getMpiType(in_left),
                        MPI_SUM, ival_left.m_comm, &requests[1], Constants::CALC_EXCH);
-    RBC::IscanAndBcast(&in_right[0], &presum_right[0], &global_right[0], 2, MPI_LONG_LONG,
+    RBC::IscanAndBcast(&in_right[0], &presum_right[0], &global_right[0], 2,
+                       Common::getMpiType(in_right),
                        MPI_SUM, ival_right.m_comm, &requests[0], Constants::CALC_EXCH);
     RBC::Waitall(2, requests, MPI_STATUSES_IGNORE);
 
@@ -738,7 +751,7 @@ class Sorter {
  */
   void createIntervals(QSInterval_SQS<T>& ival, int64_t offset, int left_size,
                        bool janus,
-                       int64_t mid, RBC::Comm& comm_left, RBC::Comm& comm_right,
+                       int64_t mid, const RBC::Comm& comm_left, const RBC::Comm& comm_right,
                        QSInterval_SQS<T>& ival_left,
                        QSInterval_SQS<T>& ival_right) {
     int64_t missing_last_left, missing_first_right;
@@ -769,10 +782,14 @@ class Sorter {
 
     ival_left = QSInterval_SQS<T>(ival.m_data, ival.m_buffer, split_size_left, extra_elements_left,
                                   start, mid, comm_left, ival.m_missing_first_pe, missing_last_left,
-                                  m_mpi_type, ival.m_seed, ival.m_min_samples, ival.m_add_pivot, true);
-    ival_right = QSInterval_SQS<T>(ival.m_data, ival.m_buffer, split_size_right, extra_elements_right,
-                                   mid, end, comm_right, missing_first_right, ival.m_missing_last_pe,
-                                   m_mpi_type, ival.m_seed + 1, ival.m_min_samples, ival.m_add_pivot, false);
+                                  m_mpi_type, ival.m_seed, ival.m_min_samples, ival.m_add_pivot,
+                                  true);
+    ival_right = QSInterval_SQS<T>(ival.m_data, ival.m_buffer, split_size_right,
+                                   extra_elements_right,
+                                   mid, end, comm_right, missing_first_right,
+                                   ival.m_missing_last_pe,
+                                   m_mpi_type, ival.m_seed + 1, ival.m_min_samples,
+                                   ival.m_add_pivot, false);
   }
 
 /*

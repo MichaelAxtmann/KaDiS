@@ -5,20 +5,29 @@
  * Copyright (c) 2016-2017, Armin Wiebigke <armin.wiebigke@gmail.com>
  * Copyright (C) 2016-2019, Michael Axtmann <michael.axtmann@kit.edu>
  * Copyright (c) 2016-2017, Tobias Heuer <tobias.heuer@gmx.net>
+ * All rights reserved.
  *
- * This program is free software: you can redistribute it and/or modify it under
- * the terms of the GNU General Public License as published by the Free Software
- * Foundation, either version 3 of the License, or (at your option) any later
- * version.
+ * Redistribution and use in source and binary forms, with or without
+ * modification, are permitted provided that the following conditions are met:
  *
- * This program is distributed in the hope that it will be useful, but WITHOUT
- * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS
- * FOR A PARTICULAR PURPOSE.  See the GNU General Public License for more
- * details.
+ * * Redistributions of source code must retain the above copyright notice, this
+ *   list of conditions and the following disclaimer.
  *
- * You should have received a copy of the GNU General Public License along with
- * this program.  If not, see <http://www.gnu.org/licenses/>.
- *******************************************************************************/
+ * * Redistributions in binary form must reproduce the above copyright notice,
+ *   this list of conditions and the following disclaimer in the documentation
+ *   and/or other materials provided with the distribution.
+ *
+ * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
+ * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+ * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
+ * DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
+ * FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
+ * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
+ * SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
+ * CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
+ * OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+ * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ *****************************************************************************/
 
 #pragma once
 
@@ -26,10 +35,10 @@
 #include <cassert>
 #include <cstring>
 
-#include "../../include/RBC/RBC.hpp"
 #include "Constants.hpp"
 #include "QSInterval.hpp"
 #include "RequestVector.hpp"
+#include <RBC.hpp>
 
 namespace JanusSort {
 template <typename T>
@@ -100,22 +109,26 @@ class DataExchange_SQS {
       if (recv_count_small_l < recv_small_l) {
         receiveData(ival_left.m_comm, requests,
                     data_ptr_left + ival_left.m_local_start + recv_count_small_l,
-                    recv_count_small_l, recv_small_l, Constants::EXCHANGE_SMALL, ival_left.m_mpi_type);
+                    recv_count_small_l, recv_small_l, Constants::EXCHANGE_SMALL,
+                    ival_left.m_mpi_type);
       }
       if (recv_count_large_l < recv_large_l) {
         receiveData(ival_left.m_comm, requests,
                     data_ptr_left + ival_left.m_local_start + recv_small_l + recv_count_large_l,
-                    recv_count_large_l, recv_large_l, Constants::EXCHANGE_LARGE, ival_left.m_mpi_type);
+                    recv_count_large_l, recv_large_l, Constants::EXCHANGE_LARGE,
+                    ival_left.m_mpi_type);
       }
       if (recv_count_small_r < recv_small_r) {
         receiveData(ival_right.m_comm, requests,
                     data_ptr_right + ival_right.m_local_start + recv_count_small_r,
-                    recv_count_small_r, recv_small_r, Constants::EXCHANGE_SMALL, ival_right.m_mpi_type);
+                    recv_count_small_r, recv_small_r, Constants::EXCHANGE_SMALL,
+                    ival_right.m_mpi_type);
       }
       if (recv_count_large_r < recv_large_r) {
         receiveData(ival_right.m_comm, requests,
                     data_ptr_right + ival_right.m_local_start + recv_small_r + recv_count_large_r,
-                    recv_count_large_r, recv_large_r, Constants::EXCHANGE_LARGE, ival_right.m_mpi_type);
+                    recv_count_large_r, recv_large_r, Constants::EXCHANGE_LARGE,
+                    ival_right.m_mpi_type);
       }
     }
     requests.waitAll();
@@ -126,8 +139,10 @@ class DataExchange_SQS {
  * Calculate how much small and large data need to be received
  */
   static void getRecvCount(QSInterval_SQS<T>& ival, int64_t& recv_small, int64_t& recv_large) {
-    int small_end_pe = ival.getRankFromIndex(ival.m_missing_first_pe + ival.m_global_small_elements - 1);
-    int large_start_pe = ival.getRankFromIndex(ival.m_missing_first_pe + ival.m_global_small_elements);
+    int small_end_pe = ival.getRankFromIndex(ival.m_missing_first_pe +
+                                             ival.m_global_small_elements - 1);
+    int large_start_pe = ival.getRankFromIndex(ival.m_missing_first_pe +
+                                               ival.m_global_small_elements);
     int local_elements = ival.getLocalElements();
 
     if (large_start_pe > ival.m_rank) {
@@ -218,7 +233,6 @@ class DataExchange_SQS {
       if (ready) {
         int count;
         MPI_Get_count(&status, mpi_type, &count);
-//                std::cout << W(recv_total) << W(recv_count) << W(count) << std::endl;
         assert(recv_count + count <= recv_total);
         int source = RBC::get_Rank_from_Status(comm, status);
         RBC::Request req;
@@ -237,11 +251,13 @@ class DataExchange_SQS {
   static void copyDataToBuffer(QSInterval_SQS<T>& ival) {
     T* data_ptr = ival.m_data->data();
     int64_t copy = ival.m_bound1 - ival.m_local_start;
-    std::memcpy(ival.m_buffer + ival.m_local_start, data_ptr + ival.m_local_start, copy * sizeof(T));
+    std::memcpy(ival.m_buffer + ival.m_local_start, data_ptr + ival.m_local_start, copy *
+                sizeof(T));
 
     int64_t small_right = ival.m_bound2 - ival.m_split;
     copy = ival.m_split - ival.m_bound1;
-    std::memcpy(ival.m_buffer + ival.m_bound1 + small_right, data_ptr + ival.m_bound1, copy * sizeof(T));
+    std::memcpy(ival.m_buffer + ival.m_bound1 + small_right, data_ptr + ival.m_bound1, copy *
+                sizeof(T));
 
     copy = ival.m_bound2 - ival.m_split;
     std::memcpy(ival.m_buffer + ival.m_bound1, data_ptr + ival.m_split, copy * sizeof(T));

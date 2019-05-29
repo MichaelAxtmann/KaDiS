@@ -3,20 +3,29 @@
  * (KaDiS).
  *
  * Copyright (c) 2019, Michael Axtmann <michael.axtmann@kit.edu>
+ * All rights reserved.
  *
- * This program is free software: you can redistribute it and/or modify it under
- * the terms of the GNU General Public License as published by the Free Software
- * Foundation, either version 3 of the License, or (at your option) any later
- * version.
+ * Redistribution and use in source and binary forms, with or without
+ * modification, are permitted provided that the following conditions are met:
  *
- * This program is distributed in the hope that it will be useful, but WITHOUT
- * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS
- * FOR A PARTICULAR PURPOSE.  See the GNU General Public License for more
- * details.
+ * * Redistributions of source code must retain the above copyright notice, this
+ *   list of conditions and the following disclaimer.
  *
- * You should have received a copy of the GNU General Public License along with
- * this program.  If not, see <http://www.gnu.org/licenses/>.
- *******************************************************************************/
+ * * Redistributions in binary form must reproduce the above copyright notice,
+ *   this list of conditions and the following disclaimer in the documentation
+ *   and/or other materials provided with the distribution.
+ *
+ * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
+ * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+ * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
+ * DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
+ * FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
+ * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
+ * SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
+ * CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
+ * OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+ * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ *****************************************************************************/
 
 #pragma once
 
@@ -34,19 +43,23 @@
 #include <utility>
 #include <vector>
 
-#include "../../include/RBC/RBC.hpp"
-#include "ips4o.hpp"
 #include "tlx/algorithm.hpp"
 #include "tlx/math.hpp"
+#include <ips4o.hpp>
+#include <RBC.hpp>
 
-#include "../Tools/DummyTimer.hpp"
+#include "../Tools/CommonMpi.hpp"
+#include "../Tools/Dummies.hpp"
 #include "./BinTreeMedianSelection.hpp"
 #include "./RandomBitStore.hpp"
 
 namespace RQuick {
 namespace _internal {
+template <class T>
+using PairVectorItSizeT = std::pair<typename std::vector<T>::iterator, size_t>;
+
 inline
-void split(RBC::Comm& comm, RBC::Comm* subcomm) {
+void split(const RBC::Comm& comm, RBC::Comm* subcomm) {
   const auto nprocs = comm.getSize();
   const auto myrank = comm.getRank();
 
@@ -106,8 +119,8 @@ std::vector<T> middleMostElements(const std::vector<T>& v, size_t k,
 template <class T, class Comp>
 T selectSplitter(std::mt19937_64& async_gen,
                  RandomBitStore& bit_gen, const std::vector<T>& v,
-                 MPI_Datatype mpi_type, Comp&& comp, int tag,
-                 RBC::Comm& comm) {
+                 MPI_Datatype mpi_type, Comp comp, int tag,
+                 const RBC::Comm& comm) {
   assert(std::is_sorted(v.begin(), v.end(), comp));
 
   const auto local_medians = middleMostElements(v, 2, async_gen, bit_gen);
@@ -132,29 +145,120 @@ T selectSplitter(std::mt19937_64& async_gen,
  * @param v Local input. The input must be sorted.
  */
 template <class T, class Comp>
-const T* locateSplitter(const std::vector<T>& v, Comp&& comp, const T& splitter,
-                        std::mt19937_64& gen, RandomBitStore& bit_store,
-                        bool is_robust) {
-  const auto begin_equal_els = std::lower_bound(v.data(), v.data() + v.size(),
-                                                splitter, std::forward<Comp>(comp));
+const PairVectorItSizeT<T> locateSplitterLeft(std::vector<T>& v,
+                                              Comp comp,
+                                              const T& splitter,
+                                              bool is_robust,
+                                              int partner,
+                                              int tag,
+                                              const RBC::Comm& comm) {
+  using It = typename std::vector<T>::iterator;
 
   if (!is_robust) {
-    return begin_equal_els;
+    It begin_equal_els = std::lower_bound(v.begin(), v.end(),
+                                          splitter, std::forward<Comp>(comp));
+
+    int64_t send_cnt = v.end() - begin_equal_els;
+    int64_t recv_cnt = -1;
+    RBC::Sendrecv(&send_cnt, 1, Common::getMpiType(send_cnt), partner, tag,
+                  &recv_cnt, 1, Common::getMpiType(recv_cnt), partner, tag,
+                  comm, MPI_STATUS_IGNORE);
+
+    return { begin_equal_els, recv_cnt };
   }
 
-  const auto end_equal_els = std::upper_bound(begin_equal_els, v.data() + v.size(),
+  const auto begin_equal_els = std::lower_bound(v.begin(), v.end(),
+                                                splitter, std::forward<Comp>(comp));
+  const auto end_equal_els = std::upper_bound(begin_equal_els, v.end(),
                                               splitter, std::forward<Comp>(comp));
 
-  // Round down or round up randomly.
-  const auto opt_split = v.data()
-                         + v.size() / 2
-                         + ((v.size() % 2) == 1 && bit_store.getNextBit(gen));
+  // m: my; t: theirs
+  // Number of elemements < or == or > than the splitter
+  const int64_t mleft = begin_equal_els - v.begin();
+  const int64_t mright = v.end() - end_equal_els;
+  const int64_t mmiddle = v.size() - mleft - mright;
 
-  if (begin_equal_els < opt_split) {
-    return std::min(opt_split, end_equal_els);
-  } else {
-    return begin_equal_els;
+  auto[tleft, tright, tmiddle] =
+    [&]() {
+      int64_t send[3] = { mleft, mright, mmiddle };
+      int64_t recv[3];
+      RBC::Sendrecv(send, 3, Common::getMpiType(send), partner, tag,
+                    recv, 3, Common::getMpiType(recv), partner, tag,
+                    comm, MPI_STATUS_IGNORE);
+      return std::tuple(recv[0], recv[1], recv[2]);
+    } ();
+
+  const int64_t perf_split = (v.size() + tleft + tright + tmiddle) / 2;
+  const int64_t mkeep =
+    std::min<int64_t>(mmiddle, std::max<int64_t>(perf_split - mleft - tleft, 0));
+  const int64_t tkeep = std::min<int64_t>(tmiddle,
+                                          std::max<int64_t>(perf_split - tright - mright, 0));
+
+  return { v.begin() + mleft + mkeep, tleft + tmiddle - tkeep };
+}
+
+/*
+ * @brief Split vector according to a given splitter with or without tie-breaking.
+ *
+ * No tie-breaking: Returns a pointer to the first element which is
+ * larger or equal to the splitter.
+ *
+ * With tie-breaking: Splits the vector according to a given splitter
+ * such that the split is as close to the middle of the vector as
+ * possible.
+ *
+ * @param v Local input. The input must be sorted.
+ */
+template <class T, class Comp>
+const PairVectorItSizeT<T> locateSplitterRight(std::vector<T>& v,
+                                               Comp comp,
+                                               const T& splitter,
+                                               bool is_robust,
+                                               int partner,
+                                               int tag,
+                                               const RBC::Comm& comm) {
+  using It = typename std::vector<T>::iterator;
+
+  if (!is_robust) {
+    It begin_equal_els = std::lower_bound(v.begin(), v.end(),
+                                          splitter, std::forward<Comp>(comp));
+
+    int64_t send_cnt = begin_equal_els - v.begin();
+    int64_t recv_cnt = -1;
+    RBC::Sendrecv(&send_cnt, 1, Common::getMpiType(send_cnt), partner, tag,
+                  &recv_cnt, 1, Common::getMpiType(recv_cnt), partner, tag,
+                  comm, MPI_STATUS_IGNORE);
+
+    return { begin_equal_els, recv_cnt };
   }
+
+  const auto begin_equal_els = std::lower_bound(v.begin(), v.end(),
+                                                splitter, std::forward<Comp>(comp));
+  const auto end_equal_els = std::upper_bound(begin_equal_els, v.end(),
+                                              splitter, std::forward<Comp>(comp));
+
+  // m: my; t: theirs
+  const int64_t mleft = begin_equal_els - v.begin();
+  const int64_t mright = v.end() - end_equal_els;
+  const int64_t mmiddle = v.size() - mleft - mright;
+
+  auto[tleft, tright, tmiddle] =
+    [&]() {
+      int64_t send[3] = { mleft, mright, mmiddle };
+      int64_t recv[3];
+      RBC::Sendrecv(send, 3, Common::getMpiType(send), partner, tag,
+                    recv, 3, Common::getMpiType(recv), partner, tag,
+                    comm, MPI_STATUS_IGNORE);
+      return std::tuple(recv[0], recv[1], recv[2]);
+    } ();
+
+  const int64_t perf_split = (v.size() + tleft + tright + tmiddle) / 2;
+  const int64_t mkeep = std::min<int64_t>(mmiddle,
+                                          std::max<int64_t>(perf_split - mright - tright, 0));
+  const int64_t tkeep =
+    std::min<int64_t>(tmiddle, std::max<int64_t>(perf_split - tleft - mleft, 0));
+
+  return { v.end() - mright - mkeep, tright + tmiddle - tkeep };
 }
 
 /*
@@ -179,7 +283,7 @@ const T* locateSplitter(const std::vector<T>& v, Comp&& comp, const T& splitter,
 template <class T, class Comp>
 std::pair<const T*, const T*> twoSequenceSelection(const T* begin1, const T* end1,
                                                    const T* begin2, const T* end2,
-                                                   int64_t rank, Comp&& comp) {
+                                                   int64_t rank, Comp comp) {
   assert(std::is_sorted(begin1, end1, std::forward<Comp>(comp)));
   assert(std::is_sorted(begin2, end2, std::forward<Comp>(comp)));
 
@@ -243,32 +347,10 @@ std::pair<const T*, const T*> twoSequenceSelection(const T* begin1, const T* end
   };
 }
 
-template <class T>
-void exchange(const T* send_begin, const T* send_end,
-              std::vector<T>& v_recv,
-              int target, MPI_Datatype mpi_type,
-              int tag, RBC::Comm& comm) {
-  const auto send_size = send_end - send_begin;
-
-  RBC::Request requests[2];
-  RBC::Isend(send_begin, send_size, mpi_type, target,
-             tag, comm, requests);
-
-  int recv_size = 0;
-  MPI_Status status;
-  RBC::Probe(target, tag, comm, &status);
-  MPI_Get_count(&status, mpi_type, &recv_size);
-
-  v_recv.resize(recv_size);
-  RBC::Irecv(v_recv.data(), recv_size, mpi_type, target,
-             tag, comm, requests + 1);
-  RBC::Waitall(2, requests, MPI_STATUSES_IGNORE);
-}
-
 template <class T, class Comp>
 void merge(const T* begin1, const T* end1,
            const T* begin2, const T* end2,
-           T* tbegin, Comp&& comp) {
+           T* tbegin, Comp comp) {
   assert(std::is_sorted(begin1, end1, std::forward<Comp>(comp)));
   assert(std::is_sorted(begin2, end2, std::forward<Comp>(comp)));
 
@@ -309,8 +391,10 @@ void merge(const T* begin1, const T* end1,
 template <class T, class Tracker, class Comp>
 void sortRec(std::mt19937_64& gen, RandomBitStore& bit_store,
              std::vector<T>& v, std::vector<T>& v_merge, std::vector<T>& v_recv,
-             Comp&& comp, MPI_Datatype mpi_type, bool is_robust,
-             Tracker&& tracker, int tag, RBC::Comm& comm) {
+             Comp comp, MPI_Datatype mpi_type, bool is_robust,
+             Tracker&& tracker, int tag, const RBC::Comm& comm) {
+  using It = typename std::vector<T>::iterator;
+
   tracker.median_select_t.start(comm);
 
   const auto nprocs = comm.getSize();
@@ -333,16 +417,27 @@ void sortRec(std::mt19937_64& gen, RandomBitStore& bit_store,
   // Partition data into small elements and large elements.
 
   tracker.partition_t.start(comm);
-  const auto* separator = locateSplitter(v, std::forward<Comp>(comp), pivot,
-                                         gen, bit_store, is_robust);
-
-  const auto* send_begin = v.data();
-  const auto* send_end = separator;
-  const auto* own_begin = separator;
-  const auto* own_end = v.data() + v.size();
+  const auto partner = (myrank + (nprocs / 2)) % nprocs;
+  It separator, send_begin, send_end, own_begin, own_end;
+  int64_t recv_cnt = -1;
   if (is_left_group) {
+    std::tie(separator, recv_cnt) = locateSplitterLeft(
+      v, std::forward<Comp>(comp), pivot, is_robust, partner, tag, comm);
+
+    send_begin = v.begin();
+    send_end = separator;
+    own_begin = separator;
+    own_end = v.end();
     std::swap(send_begin, own_begin);
     std::swap(send_end, own_end);
+  } else {
+    std::tie(separator, recv_cnt) = locateSplitterRight(
+      v, std::forward<Comp>(comp), pivot, is_robust, partner, tag, comm);
+
+    send_begin = v.begin();
+    send_end = separator;
+    own_begin = separator;
+    own_end = v.end();
   }
 
   tracker.partition_t.stop();
@@ -350,9 +445,11 @@ void sortRec(std::mt19937_64& gen, RandomBitStore& bit_store,
   // Move elements to partner and receive elements for own group.
   tracker.exchange_t.start(comm);
 
-  const auto partner = (myrank + (nprocs / 2)) % nprocs;
-  exchange(send_begin, send_end, v_recv, partner,
-           mpi_type, tag, comm);
+  v_recv.resize(recv_cnt);
+  const auto send_size = send_end - send_begin;
+  RBC::Sendrecv(v.data() + (send_begin - v.begin()), send_size, mpi_type, partner, tag,
+                v_recv.data(), v_recv.size(), mpi_type, partner, tag,
+                comm, MPI_STATUS_IGNORE);
 
   tracker.exchange_t.stop();
 
@@ -385,12 +482,12 @@ void sortRec(std::mt19937_64& gen, RandomBitStore& bit_store,
 template <class T>
 void shuffle(std::mt19937_64& async_gen,
              std::vector<T>& v,
-             std::vector<T>& v_tmp,
+             std::vector<T>& v_half,
              MPI_Datatype mpi_type,
              int tag,
-             RBC::Comm& comm) {
+             const RBC::Comm& comm) {
   // Just used for OpenMP
-  std::ignore = v_tmp;
+  std::ignore = v_half;
 
   const size_t nprocs = comm.getSize();
   const size_t myrank = comm.getRank();
@@ -486,22 +583,22 @@ void shuffle(std::mt19937_64& async_gen,
         send_cnt = prefix_sum[2 * num_threads] - prefix_sum[num_threads];
         own_cnt = prefix_sum[num_threads];
         recv_cnt = 0;
-        RBC::Sendrecv(&send_cnt, 1, MPI_INT, partner, tag,
-                      &recv_cnt, 1, MPI_INT, partner, tag,
+        RBC::Sendrecv(&send_cnt, 1, Common::getMpiType(send_cnt), partner, tag,
+                      &recv_cnt, 1, Common::getMpiType(send_cnt), partner, tag,
                       comm, MPI_STATUS_IGNORE);
 
         v.resize(own_cnt + recv_cnt);
-        v_tmp.resize(send_cnt);
+        v_half.resize(send_cnt);
       }
 #pragma omp barrier
 
       std::copy(partitions[0].get(), partitions[0].get() + sizes[id],
                 v.data() + prefix_sum[id]);
       std::copy(partitions[1].get(), partitions[1].get() + sizes[num_threads + id],
-                v_tmp.data() + prefix_sum[id + num_threads] - prefix_sum[num_threads]);
+                v_half.data() + prefix_sum[id + num_threads] - prefix_sum[num_threads]);
     }
 
-    RBC::Sendrecv(v_tmp.data(), send_cnt, mpi_type, partner, tag,
+    RBC::Sendrecv(v_half.data(), send_cnt, mpi_type, partner, tag,
                   v.data() + own_cnt, recv_cnt, mpi_type, partner, tag,
                   comm, MPI_STATUS_IGNORE);
 
@@ -554,8 +651,8 @@ void shuffle(std::mt19937_64& async_gen,
   }
 }
 
-template <class Iterator, class Comp>
-void sortLocally(Iterator begin, Iterator end, Comp&& comp) {
+template <class It, class Comp>
+void sortLocally(It begin, It end, Comp comp) {
 #ifdef _OPENMP
   ips4o::parallel::sort(begin, end, std::forward<Comp>(comp));
 #else
@@ -568,10 +665,10 @@ void sort(std::mt19937_64& async_gen,
           std::vector<T>& v,
           MPI_Datatype mpi_type,
           int tag,
-          RBC::Comm comm,
           Tracker&& tracker,
-          Comp&& comp,
-          bool is_robust) {
+          Comp comp,
+          bool is_robust,
+          RBC::Comm comm) {
   if (comm.getSize() == 1) {
     tracker.local_sort_t.start(comm);
     sortLocally(v.begin(), v.end(), std::forward<Comp>(comp));
@@ -652,16 +749,16 @@ void sort(std::mt19937_64& async_gen,
   tracker.parallel_shuffle_t.start(comm);
 
   // Vector is used to store about the same number of elements as v.
-  std::vector<T> tmp1;
-  tmp1.reserve(v.capacity());
+  std::vector<T> v1;
+  v1.reserve(v.capacity());
 
   // Vector is used to store about half the number of elements as
   // v. This vector is used to receive data.
-  std::vector<T> tmp2;
-  tmp2.reserve(v.capacity() / 2);
+  std::vector<T> v_half;
+  v_half.reserve(v.capacity() / 2);
 
   if (is_robust) {
-    shuffle(async_gen, v, tmp2, mpi_type, tag, comm);
+    shuffle(async_gen, v, v_half, mpi_type, tag, comm);
   }
 
   tracker.parallel_shuffle_t.stop();
@@ -671,7 +768,7 @@ void sort(std::mt19937_64& async_gen,
   tracker.local_sort_t.stop();
 
   RandomBitStore bit_store;
-  _internal::sortRec(async_gen, bit_store, v, tmp1, tmp2, std::forward<Comp>(comp),
+  _internal::sortRec(async_gen, bit_store, v, v1, v_half, std::forward<Comp>(comp),
                      mpi_type, is_robust, std::forward<Tracker>(tracker), tag, comm);
 }
 
@@ -690,57 +787,57 @@ class DummyTracker {
 
 template <class Tracker, class T, class Comp>
 void sort(Tracker&& tracker,
-          std::mt19937_64& async_gen,
-          std::vector<T>& v,
           MPI_Datatype mpi_type,
+          std::vector<T>& v,
           int tag,
+          std::mt19937_64& async_gen,
           MPI_Comm mpi_comm,
-          Comp&& comp,
+          Comp comp,
           bool is_robust) {
   RBC::Comm comm;
   RBC::Create_Comm_from_MPI(mpi_comm, &comm);
   _internal::sort(async_gen, v, mpi_type,
-                  tag, comm, std::forward<Tracker>(tracker),
-                  std::forward<Comp>(comp), is_robust);
+                  tag, std::forward<Tracker>(tracker),
+                  std::forward<Comp>(comp), is_robust, comm);
 }
 
 template <class T, class Comp>
-void sort(std::mt19937_64& async_gen,
+void sort(MPI_Datatype mpi_type,
           std::vector<T>& v,
-          MPI_Datatype mpi_type,
           int tag,
+          std::mt19937_64& async_gen,
           MPI_Comm mpi_comm,
-          Comp&& comp,
+          Comp comp,
           bool is_robust) {
   _internal::DummyTracker tracker;
-  sort(tracker, async_gen, v, mpi_type, tag, mpi_comm,
+  sort(tracker, mpi_type, v, tag, async_gen, mpi_comm,
        comp, is_robust);
 }
 
 template <class Tracker, class T, class Comp>
 void sort(Tracker&& tracker,
-          std::mt19937_64& async_gen,
-          std::vector<T>& v,
           MPI_Datatype mpi_type,
+          std::vector<T>& v,
           int tag,
-          RBC::Comm& comm,
-          Comp&& comp,
+          std::mt19937_64& async_gen,
+          const RBC::Comm& comm,
+          Comp comp,
           bool is_robust) {
   _internal::sort(async_gen, v, mpi_type,
-                  tag, comm, std::forward<Tracker>(tracker),
-                  std::forward<Comp>(comp), is_robust);
+                  tag, std::forward<Tracker>(tracker),
+                  std::forward<Comp>(comp), is_robust, comm);
 }
 
 template <class T, class Comp>
-void sort(std::mt19937_64& async_gen,
+void sort(MPI_Datatype mpi_type,
           std::vector<T>& v,
-          MPI_Datatype mpi_type,
           int tag,
-          RBC::Comm& comm,
-          Comp&& comp,
+          std::mt19937_64& async_gen,
+          const RBC::Comm& comm,
+          Comp comp,
           bool is_robust) {
   _internal::DummyTracker tracker;
-  sort(tracker, async_gen, v, mpi_type, tag, comm,
+  sort(tracker, mpi_type, v, tag, async_gen, comm,
        comp, is_robust);
 }
 }  // namespace RQuick

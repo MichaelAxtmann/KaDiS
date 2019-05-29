@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 3.4)
+cmake_minimum_required(VERSION 3.9.4)
 
 project(KaDiS)
 
@@ -34,11 +34,15 @@ endif()
 # RBC
 add_subdirectory(external/RBC)
 
+# MPI
+find_package(MPI REQUIRED)
+
 ########################################################
 ## Flags
 ########################################################
 
-set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -std=c++14")
+set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 ## enable warnings
 
@@ -70,53 +74,73 @@ if(CMAKE_CXX_COMPILER_ID STREQUAL "Clang")
   set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wdeprecated")
 endif()
 
+# Include interprocedural optimization for targets which are generated after this code.
+
+if (CMAKE_BUILD_TYPE STREQUAL "Release")
+
+  include(CheckIPOSupported)
+
+  check_ipo_supported(RESULT ipo_supported OUTPUT error)
+  if( ipo_supported )
+    message(STATUS "IPO / LTO enabled")
+    set(CMAKE_INTERPROCEDURAL_OPTIMIZATION TRUE)
+  else()
+    message(STATUS "IPO / LTO not supported: <${error}>")
+  endif()
+  
+endif()
+
 ########################################################
 ## Executables and libraries
 ########################################################
 
-# rbcsorting library
+# kadis library
 
-add_library(rbcsorting INTERFACE)
-target_link_libraries(rbcsorting INTERFACE rbc tlx)
-
-file(GLOB RBCSORTING_INCLUDES RELATIVE ${CMAKE_CURRENT_SOURCE_DIR}
+file(GLOB KADIS_INCLUDES RELATIVE ${CMAKE_CURRENT_SOURCE_DIR}
   external/ips4o
-  include/JanusSort
-  include/RQuick
+  external/ips2pa
+  include
   )
 
-target_include_directories(rbcsorting INTERFACE ${RBCSORTING_INCLUDES})
+file(GLOB KADIS_SOURCES RELATIVE ${CMAKE_CURRENT_SOURCE_DIR}
+  "src/AmsSort/GroupMsgToPeAssignment.cpp"
+  "src/AmsSort/LocalSampleCount.cpp"
+  "src/AmsSort/Overpartition/Overpartition.cpp"
+  "src/AmsSort/Overpartition/EqualBucketBound.cpp"
+  "src/AmsSort/Overpartition/NonEqualBucketBound.cpp"
+  "src/Tools/CommonMpi.cpp"
+  "src/Tools/Common.cpp"
+  "src/Tools/DebugMpi.cpp"
+  )
 
-# rbcsorting example
-add_executable (sortingexample example/sorting_example.cpp)
-target_link_libraries(sortingexample rbcsorting atomic)
+# Build shared library to inherit mpi wrapper from parent targets
+add_library(kadis STATIC ${KADIS_SOURCES})
+target_link_libraries(kadis PUBLIC rbc tlx MPI::MPI_CXX)
 
+target_include_directories(kadis PUBLIC ${KADIS_INCLUDES})
+
+# kadis examples
+add_executable (kadisexample example/sorting.cpp)
+target_link_libraries(kadisexample kadis)
 
 ###########################
-# youcompleteme and rtags #
+# compile_commands.json   #
 ###########################
 
-option(COMPILE_DATABASE "Creates a compile database for youcompleteme and adds the database to rtags" OFF)
+option(KADIS_COMPILE_DATABASE "Create compile commands file" ON)
 
-if (COMPILE_DATABASE)
-  SET(CMAKE_EXPORT_COMPILE_COMMANDS ON)
+if (KADIS_COMPILE_DATABASE)
 
-  # add header files to existing compile database
-  list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
-  include(add_header_commands_module)
-  add_header_commands("${CMAKE_CURRENT_SOURCE_DIR}/cmake" ${CMAKE_CURRENT_BINARY_DIR})
+  set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
-  # compile database created -- continue processing
   IF( EXISTS "${CMAKE_CURRENT_BINARY_DIR}/compile_commands.json" )
     # copy compile database to source directory
     EXECUTE_PROCESS( COMMAND ${CMAKE_COMMAND} -E copy_if_different
-      ${CMAKE_CURRENT_BINARY_DIR}/compile_commands_extended.json
+      ${CMAKE_CURRENT_BINARY_DIR}/compile_commands.json
       ${CMAKE_CURRENT_SOURCE_DIR}/compile_commands.json
       )
     MESSAGE(STATUS "Copy file compile_commands_extended.json from binary dir to source dir.")
-
-    # load compile database into rtags
-    include(add_database_to_rtags_module)
-    add_database_to_rtags(${CMAKE_CURRENT_SOURCE_DIR}/compile_commands.json)
   ENDIF()
+else()
+  set(CMAKE_EXPORT_COMPILE_COMMANDS OFF)
 endif()

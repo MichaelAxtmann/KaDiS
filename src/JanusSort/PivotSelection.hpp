@@ -5,20 +5,29 @@
  * Copyright (c) 2016-2017, Armin Wiebigke <armin.wiebigke@gmail.com>
  * Copyright (C) 2016-2019, Michael Axtmann <michael.axtmann@kit.edu>
  * Copyright (c) 2016-2017, Tobias Heuer <tobias.heuer@gmx.net>
+ * All rights reserved.
  *
- * This program is free software: you can redistribute it and/or modify it under
- * the terms of the GNU General Public License as published by the Free Software
- * Foundation, either version 3 of the License, or (at your option) any later
- * version.
+ * Redistribution and use in source and binary forms, with or without
+ * modification, are permitted provided that the following conditions are met:
  *
- * This program is distributed in the hope that it will be useful, but WITHOUT
- * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS
- * FOR A PARTICULAR PURPOSE.  See the GNU General Public License for more
- * details.
+ * * Redistributions of source code must retain the above copyright notice, this
+ *   list of conditions and the following disclaimer.
  *
- * You should have received a copy of the GNU General Public License along with
- * this program.  If not, see <http://www.gnu.org/licenses/>.
- *******************************************************************************/
+ * * Redistributions in binary form must reproduce the above copyright notice,
+ *   this list of conditions and the following disclaimer in the documentation
+ *   and/or other materials provided with the distribution.
+ *
+ * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
+ * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+ * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
+ * DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
+ * FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
+ * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
+ * SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
+ * CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
+ * OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+ * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ *****************************************************************************/
 
 #pragma once
 
@@ -29,10 +38,12 @@
 #include <utility>
 #include <vector>
 
-#include "../../include/RBC/RBC.hpp"
+#include "../Tools/CommonMpi.hpp"
 #include "Constants.hpp"
 #include "QSInterval.hpp"
 #include "TbSplitter.hpp"
+
+#include <RBC.hpp>
 
 #define W(X) #X << "=" << X << ", "
 
@@ -60,8 +71,6 @@ class PivotSelection_SQS {
       zero_global_elements = false;
     }
 
-//        std::cout << W(ival.m_rank) << W(local_samples) << W(global_samples) << std::endl;
-
     std::vector<TbSplitter<T> > samples;
     pickLocalSamples(ival, local_samples, samples, std::forward<Compare>(comp), sample_generator);
     auto tb_splitter_comp = [comp](const TbSplitter<T>& first,
@@ -70,9 +79,12 @@ class PivotSelection_SQS {
                             };
 
     // Merge function used in the gather
-    auto merger = [&tb_splitter_comp](void* begin1, void* end1, void* begin2, void* end2, void* result) {
-                    std::merge(static_cast<TbSplitter<T>*>(begin1), static_cast<TbSplitter<T>*>(end1),
-                               static_cast<TbSplitter<T>*>(begin2), static_cast<TbSplitter<T>*>(end2),
+    auto merger = [&tb_splitter_comp](void* begin1, void* end1, void* begin2, void* end2,
+                                      void* result) {
+                    std::merge(static_cast<TbSplitter<T>*>(begin1),
+                               static_cast<TbSplitter<T>*>(end1),
+                               static_cast<TbSplitter<T>*>(begin2),
+                               static_cast<TbSplitter<T>*>(end2),
                                static_cast<TbSplitter<T>*>(result), tb_splitter_comp);
                   };
 
@@ -101,7 +113,6 @@ class PivotSelection_SQS {
     pivot = splitter.Splitter();
     selectSplitter(ival, splitter, split_idx);
 
-    //        std::cout << W(ival.m_rank) << W(pivot) << std::endl;
     if (ival.m_rank == 0)
       delete[] all_samples;
   }
@@ -113,7 +124,8 @@ class PivotSelection_SQS {
   static void getPivotJanus(QSInterval_SQS<T> const& ival_left,
                             QSInterval_SQS<T> const& ival_right, T& pivot_left,
                             T& pivot_right, int64_t& split_idx_left, int64_t& split_idx_right,
-                            Compare&& comp, std::mt19937_64& generator, std::mt19937_64& sample_generator) {
+                            Compare&& comp, std::mt19937_64& generator,
+                            std::mt19937_64& sample_generator) {
     int64_t global_samples_left, global_samples_right,
       local_samples_left, local_samples_right;
 
@@ -134,9 +146,12 @@ class PivotSelection_SQS {
                                    const TbSplitter<T>& second) {
                               return first.compare(second, comp);
                             };
-    auto merger = [tb_splitter_comp](void* begin1, void* end1, void* begin2, void* end2, void* result) {
-                    std::merge(static_cast<TbSplitter<T>*>(begin1), static_cast<TbSplitter<T>*>(end1),
-                               static_cast<TbSplitter<T>*>(begin2), static_cast<TbSplitter<T>*>(end2),
+    auto merger = [tb_splitter_comp](void* begin1, void* end1, void* begin2, void* end2,
+                                     void* result) {
+                    std::merge(static_cast<TbSplitter<T>*>(begin1),
+                               static_cast<TbSplitter<T>*>(end1),
+                               static_cast<TbSplitter<T>*>(begin2),
+                               static_cast<TbSplitter<T>*>(end2),
                                static_cast<TbSplitter<T>*>(result), tb_splitter_comp);
                   };
 
@@ -244,7 +259,8 @@ class PivotSelection_SQS {
                                           int64_t& total_samples, int64_t& local_samples,
                                           std::mt19937_64& generator) {
     DistrToLocSampleCount(ival.m_local_elements, total_samples,
-                          local_samples, generator, ival.m_comm, ival.m_min_samples, ival.m_add_pivot);
+                          local_samples, generator, ival.m_comm, ival.m_min_samples,
+                          ival.m_add_pivot);
   }
 
 /*
@@ -274,8 +290,8 @@ class PivotSelection_SQS {
       int src_rank = rank + (1 << k);
       if (src_rank < comm_size) {
         int64_t right_subtree;
-        RBC::Recv(&right_subtree, 1, MPI_LONG_LONG, src_rank,
-                  tag, comm, &status);
+        RBC::Recv(&right_subtree, 1, Common::getMpiType(right_subtree),
+                  src_rank, tag, comm, &status);
 
         load_r.push_back(right_subtree);
         load_l.push_back(tree_elements);
@@ -285,7 +301,7 @@ class PivotSelection_SQS {
     assert(tree_elements >= 0);
     if (rank > 0) {
       int target_id = rank - (1 << height);
-      RBC::Send(&tree_elements, 1, MPI_LONG_LONG, target_id, tag, comm);
+      RBC::Send(&tree_elements, 1, Common::getMpiType(tree_elements), target_id, tag, comm);
     }
 
     // Distribute samples
@@ -300,7 +316,7 @@ class PivotSelection_SQS {
     } else {
       int src_id = rank - (1 << height);
       int64_t recvbuf[2];
-      RBC::Recv(recvbuf, 2, MPI_LONG_LONG, src_id, tag, comm, &status);
+      RBC::Recv(recvbuf, 2, Common::getMpiType(recvbuf), src_id, tag, comm, &status);
       tree_sample_cnt = recvbuf[0];
       global_samples = recvbuf[1];
     }
@@ -330,7 +346,7 @@ class PivotSelection_SQS {
         }
 
         int64_t sendbuf[2] = { right_subtree_sample_cnt, global_samples };
-        RBC::Send(sendbuf, 2, MPI_LONG_LONG, target_rank, tag, comm);
+        RBC::Send(sendbuf, 2, Common::getMpiType(sendbuf), target_rank, tag, comm);
 
         load_l.pop_back();
         load_r.pop_back();
