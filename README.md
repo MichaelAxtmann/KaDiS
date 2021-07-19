@@ -78,8 +78,14 @@ git submodule update --init --recursive
 mkdir Release
 cd Release
 cmake .. -DCMAKE_BUILD_TYPE=Release -DMPI_C_COMPILER=mpicc -DMPI_CXX_COMPILER=mpic++
-make sortingexample
-mpirun -np 10 ./sortingexample
+make kadisexample
+mpirun -np 10 ./kadisexample
+```
+
+In the case that you use the sorting algorithms in your source code, link against the KaDiS library:
+```
+add_subdirectory(<path-to-KaDis>)
+target_link_libraries(<your-target> kadis)
 ```
 
 Use ```make rbcsorting``` to compile the sorting library.
