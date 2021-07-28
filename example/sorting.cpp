@@ -54,6 +54,13 @@ std::vector<double> createData(std::mt19937_64* gen) {
   return data;
 }
 
+struct MyStruct {
+  MyStruct(double v) : v(v){
+  }
+  MyStruct() {}
+  double v;
+};
+
 int main(int argc, char** argv) {
   // Initialize the MPI environment
   MPI_Init(&argc, &argv);
@@ -85,7 +92,12 @@ int main(int argc, char** argv) {
 
   PRINT_ROOT("Start sorting algorithm AMS-sort with RBC::Comm.");
   data = createData(&gen);
-  Ams::sortLevel(MPI_DOUBLE, data, num_levels, gen, rcomm);
+  std::vector<MyStruct> str;
+  for (const auto& d : data) str.emplace_back(d);
+  auto mycomp = [](const MyStruct& l, const MyStruct&r) {
+		  return l.v < r.v;
+		};
+  Ams::sortLevel(MPI_DOUBLE, str, num_levels, gen, rcomm, mycomp);
   // int k = 2;
   // Ams::sort(MPI_DOUBLE, data, k, gen, rcomm);
   PRINT_ROOT("Elements have been sorted");

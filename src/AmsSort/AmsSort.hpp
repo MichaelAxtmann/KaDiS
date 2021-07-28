@@ -56,7 +56,6 @@
 #include "LocalSampleCount.hpp"
 #include "LocalSampling.hpp"
 #include "Overpartition/Overpartition.hpp"
-#include "Partitioning.hpp"
 #include "SplitterSelection.hpp"
 
 namespace Ams {
@@ -514,188 +513,6 @@ std::vector<size_t> partitionInplaceWithoutEqualBuckets(AmsData& ams_data,
   return bucket_sizes;
 }
 
-// Returns number of elements in each partition.
-template <class AmsData>
-std::vector<size_t> partitionWithoutEqualBuckets(AmsData& ams_data,
-                                                 size_t glob_sample_cnt, size_t glob_splitter_cnt,
-                                                 bool* use_equal_buckets) {
-  using Tags = typename AmsData::Tags;
-  
-  ams_data.config.tracker.sampling_t.start(ams_data.comm());
-
-  std::vector<typename AmsData::T> samples;
-
-  if (glob_sample_cnt > ams_data.n_act) {
-    samples = ams_data.data;
-    glob_sample_cnt = ams_data.n_act;
-    glob_splitter_cnt = std::min(ams_data.n_act, glob_splitter_cnt);
-  } else if (ams_data.level() == 0) {
-    // Standard random sampling.
-
-    const size_t loc_sample_cnt = locSampleCountWithoutSameInputSize<Tags>(
-      ams_data.data.size(), glob_sample_cnt, ams_data.async_gen, ams_data.comm());
-
-    samples = sampleUniform(ams_data.data, loc_sample_cnt, ams_data.async_gen);
-  } else {
-    // We assume that we have 'ams_data.residual'
-    // elements. 'ams_data.residual' is the maximum number of
-    // elements which a process got assigned in the last message
-    // assignment. Note that we sample from the range [0,
-    // ams_data.residual - 1]. When we sample an element in
-    // ams_data.data which does not exist (out of bounds), we do
-    // not pick a sample. This means that we might have less
-    // samples. However, we still select our splitters with the
-    // initial oversampling ration. This results in correct
-    // sampling as we threat skipped samples as elements with key
-    // 'infinity'. We have to do it this way to avoid that a
-    // process with many elements does not sample too many
-    // elements (e.g., if the last process group gets just few
-    // elements but is executed with a large residual).
-
-    const size_t loc_sample_cnt = locSampleCountWithSameInputSize(glob_sample_cnt,
-                                                                  ams_data.sync_gen,
-                                                                  ams_data.comm());
-
-    samples = sampleUniform(ams_data.data, ams_data.residual,
-                            loc_sample_cnt, ams_data.async_gen);
-  }
-
-  auto splitters = Ams::SplitterSelection::SplitterSelection(ams_data,
-                                                             ams_data.mpi_type,
-                                                             samples,
-                                                             ams_data.comp,
-                                                             glob_sample_cnt,
-                                                             glob_splitter_cnt,
-                                                             ams_data.config.use_two_tree);
-
-  ams_data.config.tracker.sampling_t.stop();
-
-  if (splitters.empty()) {
-    *use_equal_buckets = false;
-    return { ams_data.data.size() };
-  }
-
-  ams_data.config.tracker.partition_t.start(ams_data.comm());
-
-  // Partitioning.
-  removeDuplicates(splitters, ams_data.comp);
-
-  // Partitioning.
-
-  *use_equal_buckets = false;
-
-  ams_data.tmp_data.resize(ams_data.data.size());
-  const size_t bucket_cnt = splitters.size() + 1;
-  const auto splitter_comp = TieBreakerComparator<typename AmsData::T,
-                                                  decltype(ams_data.comp)>{ ams_data.comp };
-
-  using Partitioner = KWayPartitioner<typename AmsData::T, decltype(splitter_comp), 8>;
-
-  Partitioner part(splitter_comp);
-  std::vector<size_t> bucket_sizes = part.partition(ams_data.data,
-                                                    ams_data.tmp_data,
-                                                    splitters.data(),
-                                                    bucket_cnt);
-
-  ams_data.config.tracker.partition_t.stop();
-
-  return bucket_sizes;
-}
-
-// Returns number of elements in each partition.
-template <class AmsData>
-std::vector<size_t> partitionWithTieBreaking(AmsData& ams_data, size_t glob_sample_cnt,
-                                             size_t glob_splitter_cnt, bool* use_equal_buckets) {
-  using Tags = typename AmsData::Tags;
-    
-  using TbType = TieBreaker<typename AmsData::T>;
-
-  ams_data.config.tracker.sampling_t.start(ams_data.comm());
-
-  std::vector<TbType> samples;
-
-  if (glob_sample_cnt > ams_data.n_act) {
-    const auto shifted_rank = TbType::GetOffset(ams_data.myrank);
-    samples.reserve(ams_data.data.size());
-    for (size_t i = 0; i != ams_data.data.size(); ++i) {
-      samples.emplace_back(ams_data.data[i], shifted_rank + i);
-    }
-    // samples = ams_data.data;
-    glob_sample_cnt = ams_data.n_act;
-    glob_splitter_cnt = std::min(ams_data.n_act, glob_splitter_cnt);
-  } else if (ams_data.level() == 0) {
-    // Standard random sampling.
-    const size_t loc_sample_cnt = locSampleCountWithoutSameInputSize<Tags>(
-      ams_data.data.size(), glob_sample_cnt, ams_data.async_gen, ams_data.comm());
-
-    // Local sampling.
-    samples = sampleUniformTieBreaker(ams_data.myrank, ams_data.data,
-                                      loc_sample_cnt, ams_data.async_gen);
-  } else {
-    // We assume that we have 'ams_data.residual'
-    // elements. 'ams_data.residual' is the maximum number of
-    // elements which a process got assigned in the last message
-    // assignment. Note that we sample from the range [0,
-    // ams_data.residual - 1]. When we sample an element in
-    // ams_data.data which does not exist (out of bounds), we do
-    // not pick a sample. This means that we might have less
-    // samples. However, we still select our splitters with the
-    // initial oversampling ration. This results in correct
-    // sampling as we threat skipped samples as elements with key
-    // 'infinity'. We have to do it this way to avoid that a
-    // process with many elements does not sample too many
-    // elements (e.g., if the last process group gets just few
-    // elements but is executed with a large residual).
-
-    const size_t loc_sample_cnt = locSampleCountWithSameInputSize(
-      glob_sample_cnt, ams_data.sync_gen, ams_data.comm());
-
-    // Local sampling.
-    samples = sampleUniformTieBreaker(ams_data.myrank, ams_data.data,
-                                      ams_data.residual, loc_sample_cnt, ams_data.async_gen);
-  }
-
-  const auto comp = TieBreakerComparator<typename AmsData::T,
-                                         decltype(ams_data.comp)>{ ams_data.comp };
-  // Splitter selection.
-
-  auto splitters = Ams::SplitterSelection::SplitterSelection(ams_data,
-                                                             TbType::MpiType(ams_data.mpi_type),
-                                                             samples, comp, glob_sample_cnt,
-                                                             glob_splitter_cnt,
-                                                             ams_data.config.use_two_tree);
-
-  ams_data.config.tracker.sampling_t.stop();
-
-  if (splitters.empty()) {
-    *use_equal_buckets = false;
-    return { ams_data.data.size() };
-  }
-
-  ams_data.config.tracker.partition_t.start(ams_data.comm());
-
-  removeDuplicates(splitters, comp);
-
-  // Partitioning.
-
-  const size_t bucket_cnt = splitters.size() + 1;
-  ams_data.tmp_data.resize(ams_data.data.size());
-
-  using Partitioner = KWayPartitionerImplTieBreaker<typename AmsData::T, decltype(comp), 8>;
-
-  Partitioner part(comp, TbType::GetOffset(ams_data.myrank),
-                   TbType::GetOffset(ams_data.myrank + 1));
-  std::vector<size_t> bucket_sizes = part.partition(ams_data.data,
-                                                    ams_data.tmp_data, splitters.data(),
-                                                    bucket_cnt);
-
-  *use_equal_buckets = false;
-
-  ams_data.config.tracker.partition_t.stop();
-
-  return bucket_sizes;
-}
-
 
 template <class AmsData>
 std::vector<size_t> partition(AmsData& ams_data,
@@ -706,19 +523,10 @@ std::vector<size_t> partition(AmsData& ams_data,
     return partitionInplaceWithEqualBuckets(ams_data,
                                             glob_sample_cnt, glob_splitter_cnt,
                                             use_equal_buckets);
-  } else if (ams_data.config.part_strategy == PartitioningStrategy::INPLACE_PARTITIONING) {
+  } else {
     return partitionInplaceWithoutEqualBuckets(ams_data,
                                                glob_sample_cnt, glob_splitter_cnt,
                                                use_equal_buckets);
-  } else if (ams_data.config.part_strategy == PartitioningStrategy::PARTITIONING) {
-    return partitionWithoutEqualBuckets(ams_data,
-                                        glob_sample_cnt, glob_splitter_cnt,
-                                        use_equal_buckets);
-  } else {
-    assert(ams_data.config.part_strategy == PartitioningStrategy::PARTITIONING_WITH_TIE_BREAKING);
-    return partitionWithTieBreaking(ams_data,
-                                    glob_sample_cnt, glob_splitter_cnt,
-                                    use_equal_buckets);
   }
 }
 

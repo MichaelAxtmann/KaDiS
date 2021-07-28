@@ -35,11 +35,7 @@ enum PartitioningStrategy {
   // This is the default partitioning strategy.
   INPLACE_AND_EQUAL_BUCKET_PARTITIONING,
   // ips2pa partitioning without equal buckets and without tie braking.
-  INPLACE_PARTITIONING,
-  // ssss partitioning without equal buckets and without tie braking.
-  PARTITIONING,
-  // ssss partitioning with tie breaking.
-  PARTITIONING_WITH_TIE_BREAKING
+  INPLACE_PARTITIONING
 };
 
 enum DistributionStrategy {
