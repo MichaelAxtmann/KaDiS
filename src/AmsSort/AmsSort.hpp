@@ -660,8 +660,8 @@ void exchangePway(AmsData& ams_data, const std::vector<size_t>& loc_group_el_cnt
       }
     }
 
-    assert(testAllElementsAssigned(loc_group_el_cnts, ams_data.data.size())
-           & verifySendDescription(ams_data.data.size(), distr_ranges));
+    // assert(testAllElementsAssigned(loc_group_el_cnts, ams_data.data.size())
+    //        & verifySendDescription(ams_data.data.size(), distr_ranges));
 
     if (ams_data.config.distr_strategy == DistributionStrategy::EXCHANGE_WITHOUT_RECV_SIZES) {
       Alltoallv::exchangeWithoutRecvSizes<Tags>(ams_data.config.tracker, ams_data.data, distr_ranges,
@@ -683,8 +683,8 @@ void exchangePway(AmsData& ams_data, const std::vector<size_t>& loc_group_el_cnt
     assert(ams_data.tmp_data.size() == glob_group_el_cnts[ams_data.myrank]);
   }
 
-  assert(verifyNoDataLoss(ams_data.data, ams_data.tmp_data, ams_data.mpi_type,
-                          ams_data.comm()));
+  // assert(verifyNoDataLoss(ams_data.data, ams_data.tmp_data, ams_data.mpi_type,
+  //                         ams_data.comm()));
 }
 
 template <class AmsData>
